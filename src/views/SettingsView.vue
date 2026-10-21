@@ -31,6 +31,7 @@ async function save() {
   }
 }
 
+// ── Run as administrator ──────────────────────────────────────────────────
 const admin = ref<{ elevated: boolean; enabled: boolean } | null>(null);
 const adminBusy = ref(false);
 
@@ -74,7 +75,7 @@ async function toggleLockSvc() {
     enable &&
     !confirm(
       "Windows will ask for administrator permission to install the lock-screen service.\n\n" +
-      "The service lets you type your password on the secondary PC's lock screen from your primary keyboard. Continue?"
+      "This lets you type your password on the secondary PC's lock screen from your primary keyboard. Continue?"
     )
   ) return;
   lockSvcBusy.value = true;
@@ -186,6 +187,8 @@ onMounted(() => {
 
     <section class="card">
       <h2 class="font-semibold">Security</h2>
+
+      <!-- Run as administrator -->
       <div v-if="admin" class="mt-3 flex flex-wrap items-start justify-between gap-4 rounded-lg bg-slate-50 p-4 dark:bg-slate-800/60">
         <div class="max-w-lg">
           <div class="text-sm font-medium">
@@ -206,7 +209,8 @@ onMounted(() => {
           {{ admin.enabled ? "Turn off" : "Turn on" }}
         </button>
       </div>
-      <!-- Lock-screen service toggle -->
+
+      <!-- Lock-screen service -->
       <div v-if="lockSvc !== null" class="mt-3 flex flex-wrap items-start justify-between gap-4 rounded-lg bg-slate-50 p-4 dark:bg-slate-800/60">
         <div class="max-w-lg">
           <div class="text-sm font-medium">
@@ -224,7 +228,7 @@ onMounted(() => {
           </div>
           <p class="mt-1 text-xs muted">
             Installs a background Windows service so your primary PC's keyboard and mouse work on
-            this PC's lock screen. Install this on the <strong>secondary PC</strong> (the one you want to unlock remotely).
+            this PC's lock screen. Install this on the <strong>secondary PC</strong> (IMDDEV — the one you want to unlock remotely).
             Windows asks for administrator permission once.
           </p>
         </div>
@@ -238,6 +242,7 @@ onMounted(() => {
           <span v-else>{{ lockSvc.installed ? 'Uninstall' : 'Install service' }}</span>
         </button>
       </div>
+
       <div class="mt-1 divide-y divide-slate-100 dark:divide-slate-800">
         <ToggleRow v-model="form.acceptPairRequests" label="Allow pairing requests" description="When off, unknown computers are rejected without asking. Already-trusted devices still connect." />
       </div>
@@ -245,7 +250,7 @@ onMounted(() => {
         <li>All traffic is end-to-end encrypted and authenticated (Noise XX: X25519, ChaCha20-Poly1305, BLAKE2s).</li>
         <li>Only devices you approved can send input to this PC, and only while they hold control.</li>
         <li>This PC's private key is protected with Windows DPAPI. Keystrokes are never logged or stored.</li>
-        <li>Windows lock, sign-in and UAC screens cannot be controlled remotely; that protection is intentional.</li>
+        <li>Windows lock, sign-in and UAC screens can be controlled via the lock-screen service (see above).</li>
       </ul>
     </section>
   </div>

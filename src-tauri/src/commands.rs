@@ -217,7 +217,7 @@ pub async fn get_lock_service() -> LockServiceStatus {
 }
 
 /// Install (enable=true) or uninstall (enable=false) the lock-screen helper service.
-/// A UAC prompt is shown automatically; no manual PowerShell needed.
+/// A UAC prompt is shown automatically — no manual PowerShell needed.
 #[tauri::command]
 pub async fn set_lock_service(enabled: bool) -> CmdResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -229,6 +229,4 @@ pub async fn set_lock_service(enabled: bool) -> CmdResult<()> {
     })
     .await
     .map_err(err)?
-    .map_err(|e| e)
 }
-

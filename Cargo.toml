@@ -6,7 +6,6 @@ members = [
     "crates/mkl-store",
     "crates/mkl-discovery",
     "crates/mkl-core",
-    "crates/mkl-service",
     "src-tauri",
 ]
 
