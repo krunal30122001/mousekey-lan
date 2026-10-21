@@ -1,0 +1,24 @@
+[package]
+name = "mkl-core"
+description = "Device management, secure sessions, edge switching and input routing for MouseKey LAN"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mkl-protocol.workspace = true
+mkl-input.workspace = true
+mkl-store.workspace = true
+mkl-discovery.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+local-ip-address.workspace = true
+gethostname.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tracing-subscriber.workspace = true

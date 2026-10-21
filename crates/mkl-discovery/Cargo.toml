@@ -1,0 +1,12 @@
+[package]
+name = "mkl-discovery"
+description = "mDNS / DNS-SD LAN discovery for MouseKey LAN"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mkl-protocol.workspace = true
+mdns-sd.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
