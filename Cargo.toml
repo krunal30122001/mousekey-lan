@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/mkl-protocol",
     "crates/mkl-input",
+    "crates/mkl-service",
     "crates/mkl-store",
     "crates/mkl-discovery",
     "crates/mkl-core",

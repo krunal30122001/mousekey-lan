@@ -38,6 +38,9 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../target/release/mkl-service.exe": "."
+    },
     "windows": {
       "nsis": {
         "installMode": "perMachine",
