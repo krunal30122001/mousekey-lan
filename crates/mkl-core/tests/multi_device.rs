@@ -539,3 +539,43 @@ async fn controller_lock_returns_control_and_resumes() {
     assert_eq!(a.engine.feed_input(HookEvent::MouseMove { x: 1919, y: 500 }), Disposition::Swallow);
     assert_eq!(a.engine.snapshot().active_target.as_deref(), Some(bid.as_str()));
 }
+
+/// A high-rate mouse (1 kHz) is paced on the wire, but the final position always arrives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fast_mouse_moves_are_paced_without_losing_the_final_position() {
+    let (a, b) = paired_pair().await;
+    assert_eq!(a.engine.feed_input(HookEvent::MouseMove { x: 1919, y: 500 }), Disposition::Swallow);
+    let a = Arc::new(a);
+    let feeder = a.clone();
+    // Like the hook thread: one 1 px move every millisecond for 200 ms.
+    tokio::task::spawn_blocking(move || {
+        let start = std::time::Instant::now();
+        for i in 0..200u64 {
+            while start.elapsed() < Duration::from_millis(i) {
+                std::hint::spin_loop();
+            }
+            feeder.engine.feed_input(HookEvent::MouseMove { x: 961, y: 540 });
+        }
+    })
+    .await
+    .unwrap();
+    let last = InputEvent::MouseMove { x: 202, y: 500 };
+    wait_for("final position on B", || b.injector.events.lock().last() == Some(&last)).await;
+    let moves = b.injector.events.lock().iter().filter(|e| matches!(e, InputEvent::MouseMove { .. })).count();
+    assert!(moves <= 80, "200 moves in 200 ms should be paced to ~50, B injected {moves}");
+}
+
+/// A click right after a held (paced) move is injected at the moved-to position.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn click_after_a_paced_move_lands_at_the_new_position() {
+    let (a, b) = paired_pair().await;
+    assert_eq!(a.engine.feed_input(HookEvent::MouseMove { x: 1919, y: 500 }), Disposition::Swallow);
+    a.engine.feed_input(HookEvent::MouseMove { x: 961, y: 540 });
+    a.engine.feed_input(HookEvent::MouseMove { x: 970, y: 540 });
+    a.engine.feed_input(HookEvent::Button { button: MouseButton::Left, down: true });
+    let click = InputEvent::Button { button: MouseButton::Left, down: true };
+    wait_for("click on B", || b.injector.events.lock().contains(&click)).await;
+    let got = b.injector.events.lock().clone();
+    let i = got.iter().position(|e| *e == click).unwrap();
+    assert_eq!(got[i - 1], InputEvent::MouseMove { x: 13, y: 500 });
+}

@@ -23,7 +23,8 @@ OS low-level hook (dedicated thread, own message loop)
         ├─ Local mode: pass through; detect outer-edge hit → layout.resolve → ControlEnter
         └─ Remote mode: swallow; convert to delta from anchor; track remote cursor
               └─ PeerConn.tx.try_send (bounded 512; never blocks the hook)
-                    └─ writer task: batch up to 64 msgs → 1 Noise-encrypted write (TCP_NODELAY)
+                    └─ writer task: batch up to 64 msgs → 1 Noise-encrypted write (TCP_NODELAY,
+                       QoS "control" priority); mouse moves paced to ≥ 4 ms apart (newest wins)
                                                    ⇣ LAN
 reader task → decrypt → dispatch → InjectState.apply (validate, track pressed) → SendInput
 ```

@@ -19,6 +19,13 @@ parking_lot.workspace = true
 local-ip-address.workspace = true
 gethostname.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_QoS",
+    "Win32_Networking_WinSock",
+] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tracing-subscriber.workspace = true

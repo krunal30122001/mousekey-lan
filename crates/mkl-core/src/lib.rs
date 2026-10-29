@@ -17,6 +17,7 @@ mod engine;
 mod inject;
 pub mod layout;
 mod net;
+mod qos;
 mod reconnect;
 mod router;
 mod settings;

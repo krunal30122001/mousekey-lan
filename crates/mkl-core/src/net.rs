@@ -31,9 +31,40 @@ const PEER_TIMEOUT: Duration = Duration::from_secs(5);
 const OUTBOUND_QUEUE: usize = 512;
 const WRITE_BATCH: usize = 64;
 const BULK_QUEUE: usize = 8;
+/// Minimum spacing of mouse moves on the wire (250 Hz). High-rate mice report up to every
+/// 1 ms; sending each as its own packet floods Wi-Fi and delays everything behind it.
+const MOVE_INTERVAL: Duration = Duration::from_millis(4);
 
 fn is_move(m: &Message) -> bool {
     matches!(m, Message::Input(mkl_protocol::InputEvent::MouseMove { .. }))
+}
+
+/// Encrypts `batch` into one write. A move immediately followed by another move is skipped
+/// (positions are absolute). Returns false if the connection failed.
+async fn write_batch(
+    writer: &mut SecureWriter,
+    peer: &PeerConn,
+    batch: &[Message],
+    last_move: &mut tokio::time::Instant,
+) -> bool {
+    let mut n = 0u64;
+    for (i, m) in batch.iter().enumerate() {
+        if is_move(m) && batch.get(i + 1).is_some_and(is_move) {
+            continue;
+        }
+        if writer.push(m).is_err() {
+            return false;
+        }
+        if is_move(m) {
+            *last_move = tokio::time::Instant::now();
+        }
+        n += 1;
+    }
+    if n == 0 {
+        return true;
+    }
+    peer.stats.sent.fetch_add(n, Relaxed);
+    writer.flush().await.is_ok()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -112,6 +143,7 @@ async fn handle_connection(
     intent: DialIntent,
 ) -> Result<()> {
     let _ = stream.set_nodelay(true);
+    let _priority = crate::qos::prioritize(&stream);
     let Established { remote_static, handshake_hash, mut reader, mut writer } =
         timeout(HANDSHAKE_TIMEOUT, handshake(stream, &shared.keys, initiator))
             .await
@@ -301,15 +333,20 @@ async fn run_session(
     // Writer: drains everything queued into one encrypted write. Consecutive mouse moves are
     // coalesced into the newest one (positions are absolute), so a slow link never builds a
     // backlog of stale positions; keys, clicks and wheel are always kept and in order.
+    // Moves are also paced to MOVE_INTERVAL: one arriving sooner is held (and replaced by any
+    // newer move) until the interval ends, or sent ahead of the next non-move message.
     let mut wclose = close_rx.clone();
     let wpeer = peer.clone();
     let writer_task = shared.rt.spawn(async move {
+        let mut held: Option<Message> = None;
+        let mut last_move = tokio::time::Instant::now();
         loop {
             tokio::select! {
                 biased;
                 msg = rx.recv() => {
                     let Some(msg) = msg else { break };
                     let mut batch = Vec::with_capacity(16);
+                    batch.extend(held.take());
                     batch.push(msg);
                     while batch.len() < WRITE_BATCH * 4 {
                         match rx.try_recv() {
@@ -317,18 +354,18 @@ async fn run_session(
                             Err(_) => break,
                         }
                     }
-                    let mut ok = true;
-                    let mut n = 0u64;
-                    for (i, m) in batch.iter().enumerate() {
-                        // Skip a move that is immediately superseded by another move.
-                        if is_move(m) && batch.get(i + 1).is_some_and(is_move) {
-                            continue;
+                    if batch.last().is_some_and(is_move) && last_move.elapsed() < MOVE_INTERVAL {
+                        held = batch.pop();
+                        // Moves right before the held one are superseded by it.
+                        while batch.last().is_some_and(is_move) {
+                            batch.pop();
                         }
-                        ok &= writer.push(m).is_ok();
-                        n += 1;
                     }
-                    wpeer.stats.sent.fetch_add(n, Relaxed);
-                    if !ok || writer.flush().await.is_err() { break; }
+                    if !write_batch(&mut writer, &wpeer, &batch, &mut last_move).await { break; }
+                }
+                _ = tokio::time::sleep_until(last_move + MOVE_INTERVAL), if held.is_some() => {
+                    let batch: Vec<Message> = held.take().into_iter().collect();
+                    if !write_batch(&mut writer, &wpeer, &batch, &mut last_move).await { break; }
                 }
                 chunk = bulk_rx.recv() => {
                     // Bulk data (files, clipboard) only goes out when no input is waiting.
@@ -338,6 +375,7 @@ async fn run_session(
                 }
                 _ = wclose.changed() => {
                     // Drain anything queued before the close (e.g. key releases), then say bye.
+                    if let Some(m) = held.take() { let _ = writer.push(&m); }
                     while let Ok(m) = rx.try_recv() { let _ = writer.push(&m); }
                     let _ = writer.push(&Message::Bye);
                     let _ = timeout(Duration::from_millis(500), writer.flush()).await;
