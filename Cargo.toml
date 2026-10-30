@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 license = "MIT"
 rust-version = "1.80"
@@ -40,6 +40,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 windows-sys = "0.59"
 local-ip-address = "0.6"
 gethostname = "0.5"
+socket2 = "0.5"
 
 [profile.release]
 opt-level = 3

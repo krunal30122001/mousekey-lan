@@ -34,8 +34,13 @@ const BULK_QUEUE: usize = 8;
 /// Minimum spacing of mouse moves on the wire (250 Hz). High-rate mice report up to every
 /// 1 ms; sending each as its own packet floods Wi-Fi and delays everything behind it.
 const MOVE_INTERVAL: Duration = Duration::from_millis(4);
+/// Kernel send buffer of a session. Input queues behind whatever is already in it, so it is
+/// kept small: a clipboard or file transfer can't put more than this ahead of a keystroke.
+const SEND_BUFFER: usize = 64 * 1024;
+/// Round trips at or above this are logged, so stalls can be matched to what caused them.
+const LATENCY_SPIKE: Duration = Duration::from_millis(100);
 
-fn is_move(m: &Message) -> bool {
+pub(crate) fn is_move(m: &Message) -> bool {
     matches!(m, Message::Input(mkl_protocol::InputEvent::MouseMove { .. }))
 }
 
@@ -143,6 +148,7 @@ async fn handle_connection(
     intent: DialIntent,
 ) -> Result<()> {
     let _ = stream.set_nodelay(true);
+    let _ = socket2::SockRef::from(&stream).set_send_buffer_size(SEND_BUFFER);
     let _priority = crate::qos::prioritize(&stream);
     let Established { remote_static, handshake_hash, mut reader, mut writer } =
         timeout(HANDSHAKE_TIMEOUT, handshake(stream, &shared.keys, initiator))
@@ -443,7 +449,11 @@ fn dispatch(shared: &Arc<Shared>, peer: &Arc<PeerConn>, msg: Message) {
         }
         Message::Pong { nonce } => {
             let now = shared.started.elapsed().as_micros() as u64;
-            peer.rtt_us.store(now.saturating_sub(nonce).max(1), Relaxed);
+            let rtt = now.saturating_sub(nonce).max(1);
+            peer.rtt_us.store(rtt, Relaxed);
+            if rtt >= LATENCY_SPIKE.as_micros() as u64 {
+                warn!(device = %peer.id, rtt_ms = rtt / 1000, "latency spike");
+            }
         }
         Message::ControlEnter { x, y } => {
             let screens = shared.local_screens.read().clone();

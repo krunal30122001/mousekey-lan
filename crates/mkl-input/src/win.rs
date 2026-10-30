@@ -17,7 +17,7 @@ use windows_sys::Win32::Foundation::{GetLastError, BOOL, HWND, LPARAM, LRESULT, 
 use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::RemoteDesktop::{WTSRegisterSessionNotification, WTSUnRegisterSessionNotification};
-use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::System::Threading::{GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_HIGHEST};
 use windows_sys::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
@@ -165,6 +165,8 @@ pub fn start_capture(sink: Arc<dyn CaptureSink>) -> Result<CaptureHandle, InputE
 
 unsafe fn hook_thread(sink: Arc<dyn CaptureSink>, ready: mpsc::Sender<Result<u32, InputError>>) {
     SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    // All input on the PC waits for this thread, and Windows removes hooks that answer late.
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     SINK.with(|s| *s.borrow_mut() = Some(sink));
 
     let hmod = GetModuleHandleW(null());

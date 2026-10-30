@@ -2514,7 +2514,7 @@ dependencies = [
 
 [[package]]
 name = "mkl-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "gethostname",
@@ -2526,6 +2526,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "socket2 0.5.10",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2534,7 +2535,7 @@ dependencies = [
 
 [[package]]
 name = "mkl-discovery"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "mdns-sd",
  "mkl-protocol",
@@ -2544,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "mkl-input"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "mkl-protocol",
  "thiserror 1.0.69",
@@ -2554,7 +2555,7 @@ dependencies = [
 
 [[package]]
 name = "mkl-protocol"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "bincode",
  "hex",
@@ -2580,7 +2581,7 @@ dependencies = [
 
 [[package]]
 name = "mkl-store"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "mkl-protocol",
  "rusqlite",
@@ -2593,7 +2594,7 @@ dependencies = [
 
 [[package]]
 name = "mousekey-lan"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "mkl-core",

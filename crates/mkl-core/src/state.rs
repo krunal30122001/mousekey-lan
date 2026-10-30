@@ -24,6 +24,10 @@ pub struct PairDecision {
     pub block: bool,
 }
 
+/// Queue slots mouse moves may not use, so a burst of moves on a stalled link can never push
+/// out keys, clicks or their releases.
+const INPUT_RESERVE: usize = 64;
+
 #[derive(Default)]
 pub struct PeerStats {
     pub sent: AtomicU64,
@@ -54,6 +58,10 @@ impl PeerConn {
     /// Queues a message without blocking. Mouse moves are absolute, so dropping one under
     /// back-pressure is harmless; the next one supersedes it.
     pub fn try_send(&self, msg: Message) -> bool {
+        if crate::net::is_move(&msg) && self.tx.capacity() <= INPUT_RESERVE {
+            self.stats.dropped.fetch_add(1, Relaxed);
+            return false;
+        }
         match self.tx.try_send(msg) {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Full(_)) => {
@@ -269,6 +277,40 @@ impl Shared {
             let _ = self.store.touch_device(&peer.id, None);
             self.reconnect_now.notify_one();
             self.changed();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mkl_protocol::{InputEvent, MouseButton};
+
+    #[test]
+    fn mouse_moves_cannot_fill_the_slots_reserved_for_clicks_and_keys() {
+        let (tx, _rx) = mpsc::channel(512);
+        let (bulk_tx, _bulk_rx) = mpsc::channel(1);
+        let (close_tx, _close_rx) = watch::channel(false);
+        let peer = PeerConn {
+            id: "p".into(),
+            name: "p".into(),
+            conn_id: 1,
+            addr: "127.0.0.1:1".parse().unwrap(),
+            dialer: "p".into(),
+            tx,
+            bulk_tx,
+            close_tx,
+            screens: RwLock::new(Vec::new()),
+            rtt_us: Default::default(),
+            remote_locked: Default::default(),
+            connected_at: Instant::now(),
+            stats: Default::default(),
+        };
+        let moves = (0..1000).filter(|i| peer.try_send(Message::Input(InputEvent::MouseMove { x: *i, y: 0 }))).count();
+        assert_eq!(moves, 512 - INPUT_RESERVE);
+        assert_eq!(peer.stats.dropped.load(Relaxed), (1000 - moves) as u64);
+        for _ in 0..INPUT_RESERVE {
+            assert!(peer.try_send(Message::Input(InputEvent::Button { button: MouseButton::Left, down: true })));
         }
     }
 }

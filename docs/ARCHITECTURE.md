@@ -29,8 +29,11 @@ OS low-level hook (dedicated thread, own message loop)
 reader task → decrypt → dispatch → InjectState.apply (validate, track pressed) → SendInput
 ```
 
-* **Never blocks the hook.** If the queue is full (stalled link), mouse moves are dropped (they
-  are absolute, so the next one corrects position) and counted in diagnostics.
+* **Never blocks the hook.** If the queue is nearly full (stalled link), mouse moves are dropped
+  (they are absolute, so the next one corrects position) and counted in diagnostics. The last 64
+  slots are reserved for keys and clicks.
+* **Small send buffer.** Sessions use a 64 KB kernel send buffer, so bulk transfers can't build
+  a long backlog ahead of input on the shared connection.
 * **No polling.** Everything is event-driven (hooks, sockets, notifications). The reconnect
   loop wakes every 2 s only to check backoff timers, and only dials offline trusted devices.
 * **Frontend not involved.** Input never crosses the Tauri IPC boundary.
