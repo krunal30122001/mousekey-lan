@@ -1,140 +1,70 @@
-// mkl-service: UIAccess helper process for lock-screen input injection.
-//
-// This binary is NOT a Windows Service. It is started as a scheduled task
-// (ONLOGON, /IT interactive) so it runs inside the user's Session 1 — the
-// same session as the Winlogon secure desktop. With uiAccess="true" in its
-// manifest and installed in a trusted path (Program Files), it can call
-// SendInput that reaches the lock screen / UAC desktop.
-//
-// The main MouseKey LAN process communicates with this helper via a local
-// named pipe using JSON messages.
+//! MouseKey LAN lock-screen service.
+//!
+//! Windows shows the password screen of a locked PC on its secure desktop, where only SYSTEM
+//! processes may inject input. This one executable has three roles:
+//!
+//! * `--service`: the Windows service (LocalSystem). It keeps one agent running as SYSTEM in the
+//!   active console session, restarting it if it exits and moving it if the session changes.
+//! * `--agent <service pid>`: serves the lock-screen pipe for the MouseKey LAN app and injects
+//!   what it receives on the secure desktop, only while the session is locked
+//!   (see `mkl_input::secure`).
+//! * `--install`, `--upgrade`, `--uninstall`: used by the Settings toggle and the installer
+//!   (administrator rights required).
+//!
+//! Nothing here touches the network, files the user owns, the clipboard or credentials.
 
-use std::mem::size_of;
-use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::windows::named_pipe::ServerOptions;
-use tokio::sync::Mutex;
-use serde::{Deserialize, Serialize};
-use anyhow::{bail, Result};
+#[cfg(windows)]
+mod agent;
+#[cfg(windows)]
+mod install;
+#[cfg(windows)]
+mod service;
 
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, MOUSEINPUT,
-};
-
-const PIPE_NAME: &str = r"\\.\pipe\MouseKeyLANService";
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "cmd", rename_all = "snake_case")]
-enum Cmd {
-    InjectKeyboard { events: Vec<KeyEv> },
-    InjectMouse { dx: i32, dy: i32, flags: u32 },
-    Ping,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct KeyEv {
-    vk: u16,
-    scan: u16,
-    flags: u32, // KEYEVENTF_* bits
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Resp {
-    ok: bool,
-    msg: String,
-}
-
-#[tokio::main]
-async fn main() {
-    env_logger::init();
-    log::info!("mkl-service started (UIAccess helper)");
-
-    // Single named-pipe instance; loop to handle one client at a time.
-    loop {
-        match run_once().await {
-            Ok(_) => {}
-            Err(e) => log::error!("pipe error: {e}"),
+#[cfg(windows)]
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let code = match args.first().map(String::as_str) {
+        None | Some("--service") => service::run(),
+        Some("--agent") => agent::run(args.get(1).and_then(|pid| pid.parse().ok())),
+        Some("--install") => install::cli(install::install()),
+        Some("--upgrade") => install::cli(install::upgrade()),
+        Some("--uninstall") => install::cli(install::uninstall()),
+        Some(_) => {
+            eprintln!("usage: mkl-service [--install | --upgrade | --uninstall]");
+            2
         }
-    }
-}
-
-async fn run_once() -> Result<()> {
-    let server = Arc::new(Mutex::new(
-        ServerOptions::new()
-            .first_pipe_instance(false)
-            .create(PIPE_NAME)?,
-    ));
-
-    // Wait for client
-    server.lock().await.connect().await?;
-
-    // Read one request (up to 64 KB)
-    let mut buf = vec![0u8; 65536];
-    let n = server.lock().await.read(&mut buf).await?;
-    if n == 0 {
-        return Ok(());
-    }
-
-    let payload = std::str::from_utf8(&buf[..n])?;
-    let cmd: Cmd = serde_json::from_str(payload)?;
-    let resp = handle(cmd).await;
-
-    let json = serde_json::to_string(&resp)?;
-    let mut guard = server.lock().await;
-    guard.write_all(json.as_bytes()).await?;
-    guard.flush().await?;
-    guard.disconnect()?;
-    Ok(())
-}
-
-async fn handle(cmd: Cmd) -> Resp {
-    match cmd {
-        Cmd::Ping => Resp { ok: true, msg: "pong".into() },
-        Cmd::InjectKeyboard { events } => match inject_keys(events) {
-            Ok(_) => Resp { ok: true, msg: "ok".into() },
-            Err(e) => Resp { ok: false, msg: e.to_string() },
-        },
-        Cmd::InjectMouse { dx, dy, flags } => match inject_mouse(dx, dy, flags) {
-            Ok(_) => Resp { ok: true, msg: "ok".into() },
-            Err(e) => Resp { ok: false, msg: e.to_string() },
-        },
-    }
-}
-
-fn inject_keys(events: Vec<KeyEv>) -> Result<()> {
-    let inputs: Vec<INPUT> = events
-        .into_iter()
-        .map(|ev| INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: ev.vk,
-                    wScan: ev.scan,
-                    dwFlags: ev.flags,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        })
-        .collect();
-
-    let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
-    if sent != inputs.len() as u32 {
-        bail!("SendInput: sent {sent}/{}", inputs.len());
-    }
-    Ok(())
-}
-
-fn inject_mouse(dx: i32, dy: i32, flags: u32) -> Result<()> {
-    let input = INPUT {
-        r#type: INPUT_MOUSE,
-        Anonymous: INPUT_0 {
-            mi: MOUSEINPUT { dx, dy, mouseData: 0, dwFlags: flags, time: 0, dwExtraInfo: 0 },
-        },
     };
-    let sent = unsafe { SendInput(1, &input as *const INPUT, size_of::<INPUT>() as i32) };
-    if sent != 1 {
-        bail!("SendInput mouse failed");
+    std::process::exit(code);
+}
+
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("mkl-service is only needed on Windows");
+    std::process::exit(2);
+}
+
+/// Logs to `logs\<name>.log` next to the executable: in Program Files only administrators and
+/// SYSTEM can write there, so nobody can redirect what SYSTEM writes. Input is never logged.
+#[cfg(windows)]
+fn init_logging(name: &str) {
+    use std::fs::{self, OpenOptions};
+    use std::sync::Mutex;
+
+    const MAX_LOG_BYTES: u64 = 1024 * 1024;
+    let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("logs"))) else {
+        return;
+    };
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join(format!("{name}.log"));
+    if fs::metadata(&path).map(|m| m.len() > MAX_LOG_BYTES).unwrap_or(false) {
+        let _ = fs::rename(&path, dir.join(format!("{name}.old.log")));
     }
-    Ok(())
+    if let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = tracing_subscriber::fmt().with_ansi(false).with_writer(Mutex::new(file)).try_init();
+    }
+}
+
+#[cfg(windows)]
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(Some(0)).collect()
 }

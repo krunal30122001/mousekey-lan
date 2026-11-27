@@ -621,7 +621,7 @@ pub fn handle_system(shared: &Arc<Shared>, ev: SystemEvent) {
         SystemEvent::SessionLocked | SystemEvent::Suspend => {
             if ev == SystemEvent::SessionLocked {
                 shared.locked.store(true, Relaxed);
-                shared.broadcast(Message::Status { locked: true });
+                shared.refresh_lock_status();
             }
             return_local(shared);
             {
@@ -630,10 +630,15 @@ pub fn handle_system(shared: &Arc<Shared>, ev: SystemEvent) {
                 st.passthrough_ups.clear();
                 st.held.clear();
             }
+            // With the lock-screen service the PC driving this one keeps control, so it can
+            // type the password; anything it held down is still released.
+            let keep_control = ev == SystemEvent::SessionLocked && !shared.input_blocked();
             let s = shared.clone();
             shared.rt.spawn(async move {
                 let mut inj = s.inject.lock();
-                if let Some(c) = inj.controlled_by.clone() {
+                if keep_control {
+                    inj.release_all(&*s.injector);
+                } else if let Some(c) = inj.controlled_by.clone() {
                     inj.end(&c, &*s.injector);
                 }
             });
@@ -642,7 +647,7 @@ pub fn handle_system(shared: &Arc<Shared>, ev: SystemEvent) {
         SystemEvent::SessionUnlocked | SystemEvent::Resume => {
             if ev == SystemEvent::SessionUnlocked {
                 shared.locked.store(false, Relaxed);
-                shared.broadcast(Message::Status { locked: false });
+                shared.refresh_lock_status();
             }
             *shared.local_screens.write() = shared.injector.screens();
             shared.backoff.lock().clear();

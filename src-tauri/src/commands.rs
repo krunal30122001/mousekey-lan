@@ -200,20 +200,20 @@ pub struct LockServiceStatus {
     installed: bool,
     /// Service is currently running.
     running: bool,
+    /// This app reaches the service's agent, so input works on this PC's lock screen. Needs
+    /// "Run as administrator".
+    ready: bool,
 }
 
-/// Return the current install/run state of the lock-screen helper service.
+/// Return the current state of the lock-screen service.
 #[tauri::command]
 pub async fn get_lock_service() -> LockServiceStatus {
-    let (installed, running) = tauri::async_runtime::spawn_blocking(|| {
-        (
-            crate::lock_service::service_installed(),
-            crate::lock_service::service_running(),
-        )
+    let ((installed, running), ready) = tauri::async_runtime::spawn_blocking(|| {
+        (crate::lock_service::service_state(), mkl_input::secure::ready())
     })
     .await
-    .unwrap_or((false, false));
-    LockServiceStatus { installed, running }
+    .unwrap_or(((false, false), false));
+    LockServiceStatus { installed, running, ready }
 }
 
 /// Install (enable=true) or uninstall (enable=false) the lock-screen helper service.

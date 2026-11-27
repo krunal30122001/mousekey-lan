@@ -108,6 +108,7 @@ impl Engine {
             disconnected_at: Default::default(),
             reconnect_now: Notify::new(),
             locked: AtomicBool::new(false),
+            announced_blocked: AtomicBool::new(false),
             capture_running: AtomicBool::new(false),
             discovery_running: AtomicBool::new(false),
             stats: Default::default(),
@@ -126,6 +127,7 @@ impl Engine {
 
         shared.rt.spawn(net::run_listener(shared.clone(), listener));
         shared.rt.spawn(crate::reconnect::run(shared.clone()));
+        shared.rt.spawn(watch_lock_status(shared.clone()));
 
         let capture = if cfg.enable_capture {
             match mkl_input::start_capture(Arc::new(HookSink(shared.clone()))) {
@@ -654,10 +656,24 @@ pub(crate) fn on_peer_connected(s: &Arc<Shared>, peer: &Arc<PeerConn>) {
         persist_layout(s);
     }
     peer.try_send(Message::Layout(s.layout.read().to_sync()));
-    if s.locked.load(Relaxed) {
+    if s.input_blocked() {
         peer.try_send(Message::Status { locked: true });
     }
     s.changed();
+}
+
+/// While this PC is locked, keeps peers told whether its lock screen can take remote input:
+/// the lock-screen service may become reachable after the lock (e.g. right after a restart).
+async fn watch_lock_status(shared: Arc<Shared>) {
+    // Connect to the lock-screen service right away (its log line shows whether it is usable).
+    shared.injector.secure_input();
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+    loop {
+        tick.tick().await;
+        if shared.locked.load(Relaxed) {
+            shared.refresh_lock_status();
+        }
+    }
 }
 
 /// Layout convergence rules:

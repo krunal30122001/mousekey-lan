@@ -40,17 +40,20 @@ The app listens on **TCP 47820** and uses **mDNS (UDP 5353)** for discovery.
 
 The lock screen (LogonUI) runs on the **Winlogon secure desktop**. Processes in the user's
 session, including any regular Tauri app, can't hook input there or inject into it. This is a
-Windows security boundary, not a bug.
+Windows security boundary, not a bug. The optional lock-screen service delivers input there
+from a SYSTEM agent; see [LOCKSCREEN.md](LOCKSCREEN.md).
 
 What MouseKey LAN does:
 
 1. **Controlling PC locks:** the hooks stop receiving input; MouseKey LAN returns control
    locally, releases every key and button it was holding on the remote PC, and tells peers it
    is locked. Connections stay open.
-2. **Controlled PC locks:** it releases every injected key and button, reports
+2. **Controlled PC locks, with the lock-screen service:** it releases injected keys and
+   buttons but the controlling PC keeps control, so the password can be typed.
+3. **Controlled PC locks, without it:** it releases every injected key and button, reports
    `Status{locked:true}`, and the controlling PC immediately takes control back (the cursor
    would otherwise vanish into a screen that ignores input). Dashboard shows "Locked".
-3. **Unlock:** sharing resumes immediately. No reconnection is needed because the encrypted
+4. **Unlock:** sharing resumes immediately. No reconnection is needed because the encrypted
    sessions survived the lock. Monitors are re-enumerated in case they changed.
 
 ### Sign-in screen (after reboot or sign-out)

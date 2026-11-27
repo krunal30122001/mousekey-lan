@@ -1,21 +1,16 @@
-//! Lock-screen input helper management.
+//! Lock-screen service management (Settings toggle).
 //!
-//! Instead of a Windows Service (Session 0 — cannot reach user desktop), we
-//! register a scheduled task that runs `mkl-service.exe` at every logon in
-//! the INTERACTIVE user session (/IT flag). Combined with a `uiAccess="true"`
-//! manifest and installation in `Program Files\MouseKey LAN` (a trusted path),
-//! the helper can call `SendInput` that reaches the Windows lock screen /
-//! Winlogon secure desktop.
-//!
-//! This is the exact same mechanism used by the "Run as administrator" feature
-//! (see elevation.rs).
+//! The service is `mkl-service.exe` next to the app (see crates/mkl-service): a LocalSystem
+//! Windows service that keeps a SYSTEM agent in the user's session, so input can reach the
+//! password screen of a locked PC. Installing and removing it needs administrator rights, so
+//! both run `mkl-service.exe` behind a UAC prompt.
 
 use std::ffi::c_void;
 use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 
-const TASK_NAME: &str = "MouseKey LAN Lock Helper";
-const INSTALL_DIR: &str = r"C:\Program Files\MouseKey LAN";
+const SERVICE_NAME: &str = "MouseKeyLANService";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const SEE_MASK_NOCLOSEPROCESS: u32 = 0x0000_0040;
 const SW_HIDE: i32 = 0;
@@ -56,12 +51,11 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// Run `cmd.exe /c <script>` elevated (UAC prompt) and return exit code.
-/// Returns Err if the user cancelled the UAC dialog.
-fn run_elevated(script: &str) -> Result<u32, String> {
+/// Runs `file params` elevated (UAC prompt) and returns its exit code.
+fn run_elevated(file: &Path, params: &str) -> Result<u32, String> {
     let verb = wide("runas");
-    let file = wide("cmd.exe");
-    let params = wide(&format!("/c {script}"));
+    let file = wide(&file.to_string_lossy());
+    let params = wide(params);
     let mut info = ShellExecuteInfoW {
         cb_size: std::mem::size_of::<ShellExecuteInfoW>() as u32,
         f_mask: SEE_MASK_NOCLOSEPROCESS,
@@ -94,96 +88,47 @@ fn run_elevated(script: &str) -> Result<u32, String> {
     }
 }
 
-/// True if the scheduled task exists (helper is installed).
-pub fn is_installed() -> bool {
-    std::process::Command::new("schtasks.exe")
-        .args(["/Query", "/TN", TASK_NAME])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+/// `mkl-service.exe`, installed next to the app.
+fn service_exe() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let path = exe.with_file_name("mkl-service.exe");
+    if path.exists() {
+        Ok(path)
+    } else {
+        Err("mkl-service.exe is missing. Reinstall MouseKey LAN with its installer.".into())
+    }
 }
 
-/// True if mkl-service.exe process is running in the user's session.
-pub fn is_running() -> bool {
-    let out = std::process::Command::new("tasklist.exe")
-        .args(["/FI", "IMAGENAME eq mkl-service.exe", "/NH"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .unwrap_or_else(|_| std::process::Output {
-            status: std::process::ExitStatus::default(),
-            stdout: vec![],
-            stderr: vec![],
-        });
-    let text = String::from_utf8_lossy(&out.stdout);
-    text.contains("mkl-service.exe")
-}
-
-/// Find mkl-service.exe next to the main exe or in Program Files.
-fn find_service_exe() -> Result<std::path::PathBuf, String> {
-    if let Ok(mut p) = std::env::current_exe() {
-        p.set_file_name("mkl-service.exe");
-        if p.exists() {
-            return Ok(p);
+fn run_service_exe(arg: &str, action: &str) -> Result<(), String> {
+    let exe = service_exe()?;
+    match run_elevated(&exe, arg)? {
+        0 => Ok(()),
+        code => {
+            let log = exe.with_file_name("logs").join("service.log");
+            Err(format!("Could not {action} the lock-screen service (exit {code}). Details: {}", log.display()))
         }
     }
-    let installed = std::path::Path::new(INSTALL_DIR).join("mkl-service.exe");
-    if installed.exists() {
-        return Ok(installed);
-    }
-    Err(format!(
-        "mkl-service.exe not found next to MouseKey LAN.exe or in {INSTALL_DIR}"
-    ))
 }
 
-/// Install: copy exe to Program Files, embed UIAccess manifest, register
-/// scheduled task (ONLOGON/IT), then run it immediately.
+/// Installs and starts the service.
 pub fn install() -> Result<(), String> {
-    let src = find_service_exe()?;
-    let src_str = src.display().to_string();
-    let dst = format!(r"{INSTALL_DIR}\mkl-service.exe");
-    let user = format!(
-        "{}\\{}",
-        std::env::var("USERDOMAIN").unwrap_or_default(),
-        std::env::var("USERNAME").unwrap_or_default()
-    );
-
-    // One elevated cmd.exe does everything:
-    // 1. mkdir Program Files\MouseKey LAN
-    // 2. Copy exe there
-    // 3. Delete old task if any
-    // 4. Create ONLOGON scheduled task with /IT (interactive) so it runs in
-    //    the user's session — NOT Session 0
-    // 5. Run it immediately
-    let script = format!(
-        r#"mkdir "{INSTALL_DIR}" 2>nul & copy /Y "{src_str}" "{dst}" && schtasks /Delete /F /TN "{TASK_NAME}" 2>nul & schtasks /Create /F /TN "{TASK_NAME}" /SC ONLOGON /IT /RL HIGHEST /RU "{user}" /TR "\"{dst}\"" && schtasks /Run /TN "{TASK_NAME}""#
-    );
-
-    let code = run_elevated(&script)?;
-    if code != 0 {
-        return Err(format!("Lock-screen helper installation failed (exit {code})."));
-    }
-    Ok(())
+    run_service_exe("--install", "install")
 }
 
-/// Uninstall: kill the process and delete the scheduled task.
+/// Stops and removes the service.
 pub fn uninstall() -> Result<(), String> {
-    let script = format!(
-        r#"taskkill /F /IM mkl-service.exe 2>nul & schtasks /Delete /F /TN "{TASK_NAME}""#
-    );
-    let code = run_elevated(&script)?;
-    if code != 0 {
-        return Err(format!("Lock-screen helper removal failed (exit {code})."));
-    }
-    Ok(())
+    run_service_exe("--uninstall", "remove")
 }
 
-// ── Public surface used by commands.rs ──────────────────────────────────────
-
-pub fn service_installed() -> bool {
-    is_installed()
-}
-
-pub fn service_running() -> bool {
-    is_running()
+/// (installed, running), from the Service Control Manager.
+pub fn service_state() -> (bool, bool) {
+    let Ok(out) = std::process::Command::new("sc.exe")
+        .args(["query", SERVICE_NAME])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    else {
+        return (false, false);
+    };
+    let installed = out.status.success();
+    (installed, installed && String::from_utf8_lossy(&out.stdout).contains("RUNNING"))
 }

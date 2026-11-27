@@ -23,7 +23,7 @@ export const api = {
   openReceiveFolder: () => invoke<string>("open_receive_folder"),
   adminMode: () => invoke<{ elevated: boolean; enabled: boolean }>("get_admin_mode"),
   setAdminMode: (enabled: boolean) => invoke<void>("set_admin_mode", { enabled }),
-  lockService: () => invoke<{ installed: boolean; running: boolean }>("get_lock_service"),
+  lockService: () => invoke<{ installed: boolean; running: boolean; ready: boolean }>("get_lock_service"),
   setLockService: (enabled: boolean) => invoke<void>("set_lock_service", { enabled }),
 };
 

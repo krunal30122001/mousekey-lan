@@ -41,10 +41,12 @@ it. Inspired by Mouse Without Borders and Synergy. Built with Rust, Tauri 2 and 
 
 ## Known limitations (Windows security boundaries)
 
-* The **lock screen, sign-in screen, UAC prompts and Ctrl+Alt+Del** can't be controlled
-  remotely. When a controlled PC locks, control returns automatically; unlock it with its own
-  keyboard, and sharing resumes by itself. See [docs/PLATFORM.md](docs/PLATFORM.md) for the
-  research and options.
+* The **lock screen** can be controlled only with the optional lock-screen service
+  (Settings → Security, needs *Run as administrator*); see [docs/LOCKSCREEN.md](docs/LOCKSCREEN.md).
+  Without it, control returns automatically when a controlled PC locks; unlock it with its own
+  keyboard, and sharing resumes by itself. The **sign-in screen** after signing out, **UAC
+  prompts** and **Ctrl+Alt+Del** can't be controlled remotely. See
+  [docs/PLATFORM.md](docs/PLATFORM.md) for the research and options.
 * Windows ignores input sent into **apps running as administrator** unless MouseKey LAN also
   runs as administrator on that PC.
 * After a reboot, sharing starts once a user signs in on that PC.

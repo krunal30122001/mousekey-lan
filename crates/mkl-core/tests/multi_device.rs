@@ -1,7 +1,7 @@
 //! Multi-device network tests: real engines talking over localhost TCP with mock injectors.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,6 +15,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 struct MockInjector {
     events: Mutex<Vec<InputEvent>>,
     cursor: Mutex<(i32, i32)>,
+    /// The lock-screen service is reachable.
+    secure: AtomicBool,
 }
 
 impl InputInjector for MockInjector {
@@ -36,6 +38,9 @@ impl InputInjector for MockInjector {
     }
     fn is_key_down(&self, _vk: u16) -> bool {
         false
+    }
+    fn secure_input(&self) -> bool {
+        self.secure.load(Ordering::SeqCst)
     }
 }
 
@@ -578,4 +583,50 @@ async fn click_after_a_paced_move_lands_at_the_new_position() {
     let got = b.injector.events.lock().clone();
     let i = got.iter().position(|e| *e == click).unwrap();
     assert_eq!(got[i - 1], InputEvent::MouseMove { x: 13, y: 500 });
+}
+
+/// With the lock-screen service a locked PC stays usable: the PC driving it keeps control and
+/// can type the password, and is never told the PC is locked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lock_screen_service_keeps_a_locked_pc_controllable() {
+    let (a, b) = paired_pair().await;
+    let bid = b.engine.device_id().to_string();
+    let locked = |n: &Node| n.engine.snapshot().devices.iter().any(|d| d.id == bid && d.remote_locked);
+    b.injector.secure.store(true, Ordering::SeqCst);
+
+    assert_eq!(a.engine.feed_input(HookEvent::MouseMove { x: 1919, y: 500 }), Disposition::Swallow);
+    wait_for("B controlled", || b.engine.snapshot().controlled_by.is_some()).await;
+    b.engine.feed_system(SystemEvent::SessionLocked);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!locked(&a), "A must not be told B is locked");
+    assert_eq!(a.engine.snapshot().active_target.as_deref(), Some(bid.as_str()), "A keeps control");
+    assert!(b.engine.snapshot().controlled_by.is_some(), "B still takes A's input");
+
+    // Typing on the lock screen reaches B.
+    let key = InputEvent::Key { vk: 0x41, scan: 0x1E, extended: false, down: true };
+    a.engine.feed_input(HookEvent::Key { vk: 0x41, scan: 0x1E, extended: false, down: true });
+    wait_for("key injected on B", || b.injector.events.lock().contains(&key)).await;
+
+    // Unlocking changes nothing for A.
+    b.engine.feed_system(SystemEvent::SessionUnlocked);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!locked(&a));
+    assert_eq!(a.engine.snapshot().active_target.as_deref(), Some(bid.as_str()));
+}
+
+/// The lock-screen service can become reachable after the PC locked (e.g. it starts after a
+/// restart): peers are then told the PC is usable again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lock_screen_service_starting_late_reopens_a_locked_pc() {
+    let (a, b) = paired_pair().await;
+    let bid = b.engine.device_id().to_string();
+    let locked = |n: &Node| n.engine.snapshot().devices.iter().any(|d| d.id == bid && d.remote_locked);
+
+    b.engine.feed_system(SystemEvent::SessionLocked);
+    wait_for("A sees B locked", || locked(&a)).await;
+    b.injector.secure.store(true, Ordering::SeqCst);
+    wait_for("A sees B usable", || !locked(&a)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(a.engine.feed_input(HookEvent::MouseMove { x: 1919, y: 500 }), Disposition::Swallow);
+    assert_eq!(a.engine.snapshot().active_target.as_deref(), Some(bid.as_str()));
 }

@@ -1,23 +1,25 @@
 [package]
 name = "mkl-service"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
-rust-version = "1.80"
+description = "Lock-screen service for MouseKey LAN: delivers a paired PC's input to the Windows password screen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
-log = "0.4"
-env_logger = "0.11"
+mkl-input.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
-[dependencies.windows-sys]
-version = "0.59"
-features = [
-  "Win32_Foundation",
-  "Win32_UI_Input_KeyboardAndMouse",
-  "Win32_UI_WindowsAndMessaging",
-  "Win32_System_Threading",
-]
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Services",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+] }

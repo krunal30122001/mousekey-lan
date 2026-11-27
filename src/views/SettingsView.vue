@@ -57,7 +57,14 @@ async function toggleAdmin() {
 }
 
 // ── Lock-screen service ───────────────────────────────────────────────────
-const lockSvc = ref<{ installed: boolean; running: boolean } | null>(null);
+const lockSvc = ref<{ installed: boolean; running: boolean; ready: boolean } | null>(null);
+const lockSvcLabel = computed(() => {
+  const s = lockSvc.value;
+  if (!s) return "";
+  if (s.ready) return "ready";
+  if (s.running) return admin.value?.elevated ? "starting…" : "needs Run as administrator";
+  return s.installed ? "installed, not running" : "not installed";
+});
 const lockSvcBusy = ref(false);
 
 async function loadLockSvc() {
@@ -75,7 +82,8 @@ async function toggleLockSvc() {
     enable &&
     !confirm(
       "Windows will ask for administrator permission to install the lock-screen service.\n\n" +
-      "This lets you type your password on the secondary PC's lock screen from your primary keyboard. Continue?"
+      "It runs as SYSTEM and lets PCs paired with this one use its lock screen, including typing the password. " +
+      "Only pair PCs you own. Continue?"
     )
   ) return;
   lockSvcBusy.value = true;
@@ -214,22 +222,23 @@ onMounted(() => {
       <div v-if="lockSvc !== null" class="mt-3 flex flex-wrap items-start justify-between gap-4 rounded-lg bg-slate-50 p-4 dark:bg-slate-800/60">
         <div class="max-w-lg">
           <div class="text-sm font-medium">
-            Lock-screen unlock (secondary PC)
+            Lock-screen control
             <span
               class="ml-2 rounded px-1.5 py-0.5 text-[11px] font-semibold"
-              :class="lockSvc.running
+              :class="lockSvc.ready
                 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
                 : lockSvc.installed
                   ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-200'
                   : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'"
             >
-              {{ lockSvc.running ? 'service running' : lockSvc.installed ? 'installed, not running' : 'not installed' }}
+              {{ lockSvcLabel }}
             </span>
           </div>
           <p class="mt-1 text-xs muted">
-            Installs a background Windows service so your primary PC's keyboard and mouse work on
-            this PC's lock screen. Install this on the <strong>secondary PC</strong> (IMDDEV — the one you want to unlock remotely).
-            Windows asks for administrator permission once.
+            Lets the PC controlling this one use its lock screen and type the password, through a small Windows
+            service that runs as SYSTEM. Install it on each PC you want to unlock from another PC; it also needs
+            <strong>Run as administrator</strong> (above). Works while you're signed in and the PC is locked, not after
+            signing out. Ctrl+Alt+Del can't be sent.
           </p>
         </div>
         <button
@@ -250,7 +259,7 @@ onMounted(() => {
         <li>All traffic is end-to-end encrypted and authenticated (Noise XX: X25519, ChaCha20-Poly1305, BLAKE2s).</li>
         <li>Only devices you approved can send input to this PC, and only while they hold control.</li>
         <li>This PC's private key is protected with Windows DPAPI. Keystrokes are never logged or stored.</li>
-        <li>Windows lock, sign-in and UAC screens can be controlled via the lock-screen service (see above).</li>
+        <li>The Windows lock screen can be controlled with the lock-screen service (see above). The sign-in screen after signing out and UAC prompts can't.</li>
       </ul>
     </section>
   </div>

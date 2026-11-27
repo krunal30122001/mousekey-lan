@@ -142,6 +142,8 @@ pub struct Shared {
     pub disconnected_at: Mutex<HashMap<String, Instant>>,
     pub reconnect_now: Notify,
     pub locked: AtomicBool,
+    /// What peers were last told with `Status`: this PC can't take remote input.
+    pub announced_blocked: AtomicBool,
     pub capture_running: AtomicBool,
     pub discovery_running: AtomicBool,
     pub stats: Stats,
@@ -180,6 +182,20 @@ impl Shared {
     pub fn broadcast(&self, msg: Message) {
         for p in self.peers.read().values() {
             p.try_send(msg.clone());
+        }
+    }
+
+    /// This PC can't take remote input: it is locked and the lock-screen service can't reach
+    /// the Windows password screen.
+    pub fn input_blocked(&self) -> bool {
+        self.locked.load(Relaxed) && !self.injector.secure_input()
+    }
+
+    /// Tells peers when [`input_blocked`](Self::input_blocked) changes.
+    pub fn refresh_lock_status(&self) {
+        let blocked = self.input_blocked();
+        if self.announced_blocked.swap(blocked, Relaxed) != blocked {
+            self.broadcast(Message::Status { locked: blocked });
         }
     }
 

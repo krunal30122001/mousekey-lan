@@ -13,10 +13,14 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 
-use windows_sys::Win32::Foundation::{GetLastError, BOOL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{
+    GetLastError, BOOL, ERROR_ACCESS_DENIED, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
 use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::System::RemoteDesktop::{WTSRegisterSessionNotification, WTSUnRegisterSessionNotification};
+use windows_sys::Win32::System::RemoteDesktop::{
+    WTSRegisterSessionNotification, WTSUnRegisterSessionNotification, WTS_CURRENT_SESSION,
+};
 use windows_sys::Win32::System::Threading::{GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_HIGHEST};
 use windows_sys::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -195,6 +199,13 @@ unsafe fn hook_thread(sink: Arc<dyn CaptureSink>, ready: mpsc::Sender<Result<u32
     let _ = ready.send(Ok(GetCurrentThreadId()));
     tracing::info!("input hooks installed");
 
+    // Started inside an already locked session (Windows signs in and locks after some
+    // restarts): no lock notification will arrive, so report the lock now.
+    if crate::secure::session_locked(WTS_CURRENT_SESSION) == Some(true) {
+        SESSION_LOCKED.store(true, Ordering::Relaxed);
+        dispatch_system(SystemEvent::SessionLocked);
+    }
+
     let (mut mouse, mut keyboard) = (mouse, keyboard);
     LAST_HOOK_TICK.store(GetTickCount(), Ordering::Relaxed);
     SetTimer(null_mut(), 0, WATCHDOG_MS, None);
@@ -364,14 +375,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 #[derive(Default)]
 pub struct WinInjector;
 
-impl WinInjector {
-    fn send(&self, input: INPUT) -> Result<(), InputError> {
-        let sent = unsafe { SendInput(1, &input, size_of::<INPUT>() as i32) };
-        if sent == 1 {
-            Ok(())
-        } else {
-            Err(InputError::Inject(unsafe { GetLastError() }))
-        }
+fn send(input: INPUT) -> Result<(), InputError> {
+    let sent = unsafe { SendInput(1, &input, size_of::<INPUT>() as i32) };
+    if sent == 1 {
+        Ok(())
+    } else {
+        Err(InputError::Inject(unsafe { GetLastError() }))
     }
 }
 
@@ -399,73 +408,87 @@ fn normalize(pixel: i32, origin: i32, extent: i32) -> i32 {
     ((offset * 65_536 + extent - 1) / extent) as i32
 }
 
+/// Injects `ev` with `SendInput` from this process (no lock-screen fallback).
+pub fn send_input(ev: &InputEvent) -> Result<(), InputError> {
+let input = match *ev {
+        InputEvent::MouseMove { x, y } => {
+            let (vx, vy, vw, vh) = unsafe {
+                (
+                    GetSystemMetrics(SM_XVIRTUALSCREEN),
+                    GetSystemMetrics(SM_YVIRTUALSCREEN),
+                    GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                    GetSystemMetrics(SM_CYVIRTUALSCREEN),
+                )
+            };
+            mouse(
+                normalize(x, vx, vw),
+                normalize(y, vy, vh),
+                0,
+                (MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK) as u32,
+            )
+        }
+        InputEvent::Button { button, down } => {
+            let (flags, data) = match (button, down) {
+                (MouseButton::Left, true) => (MOUSEEVENTF_LEFTDOWN, 0),
+                (MouseButton::Left, false) => (MOUSEEVENTF_LEFTUP, 0),
+                (MouseButton::Right, true) => (MOUSEEVENTF_RIGHTDOWN, 0),
+                (MouseButton::Right, false) => (MOUSEEVENTF_RIGHTUP, 0),
+                (MouseButton::Middle, true) => (MOUSEEVENTF_MIDDLEDOWN, 0),
+                (MouseButton::Middle, false) => (MOUSEEVENTF_MIDDLEUP, 0),
+                (MouseButton::X1, true) => (MOUSEEVENTF_XDOWN, XBUTTON1),
+                (MouseButton::X1, false) => (MOUSEEVENTF_XUP, XBUTTON1),
+                (MouseButton::X2, true) => (MOUSEEVENTF_XDOWN, XBUTTON2),
+                (MouseButton::X2, false) => (MOUSEEVENTF_XUP, XBUTTON2),
+            };
+            mouse(0, 0, data as i32, flags as u32)
+        }
+        InputEvent::Wheel { delta, horizontal } => {
+            let flags = if horizontal { MOUSEEVENTF_HWHEEL } else { MOUSEEVENTF_WHEEL };
+            mouse(0, 0, delta, flags as u32)
+        }
+        InputEvent::Key { vk, scan, extended, down } => {
+            let mut flags = 0u32;
+            let mut w_vk = 0u16;
+            if scan != 0 {
+                flags |= KEYEVENTF_SCANCODE as u32;
+            } else {
+                w_vk = vk;
+            }
+            if extended {
+                flags |= KEYEVENTF_EXTENDEDKEY as u32;
+            }
+            if !down {
+                flags |= KEYEVENTF_KEYUP as u32;
+            }
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: w_vk,
+                        wScan: scan,
+                        dwFlags: flags as _,
+                        time: 0,
+                        dwExtraInfo: MKL_EXTRA_INFO,
+                    },
+                },
+            }
+        }
+    };
+    send(input)
+}
+
 impl InputInjector for WinInjector {
     fn inject(&self, ev: &InputEvent) -> Result<(), InputError> {
-        let input = match *ev {
-            InputEvent::MouseMove { x, y } => {
-                let (vx, vy, vw, vh) = unsafe {
-                    (
-                        GetSystemMetrics(SM_XVIRTUALSCREEN),
-                        GetSystemMetrics(SM_YVIRTUALSCREEN),
-                        GetSystemMetrics(SM_CXVIRTUALSCREEN),
-                        GetSystemMetrics(SM_CYVIRTUALSCREEN),
-                    )
-                };
-                mouse(
-                    normalize(x, vx, vw),
-                    normalize(y, vy, vh),
-                    0,
-                    (MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK) as u32,
-                )
-            }
-            InputEvent::Button { button, down } => {
-                let (flags, data) = match (button, down) {
-                    (MouseButton::Left, true) => (MOUSEEVENTF_LEFTDOWN, 0),
-                    (MouseButton::Left, false) => (MOUSEEVENTF_LEFTUP, 0),
-                    (MouseButton::Right, true) => (MOUSEEVENTF_RIGHTDOWN, 0),
-                    (MouseButton::Right, false) => (MOUSEEVENTF_RIGHTUP, 0),
-                    (MouseButton::Middle, true) => (MOUSEEVENTF_MIDDLEDOWN, 0),
-                    (MouseButton::Middle, false) => (MOUSEEVENTF_MIDDLEUP, 0),
-                    (MouseButton::X1, true) => (MOUSEEVENTF_XDOWN, XBUTTON1),
-                    (MouseButton::X1, false) => (MOUSEEVENTF_XUP, XBUTTON1),
-                    (MouseButton::X2, true) => (MOUSEEVENTF_XDOWN, XBUTTON2),
-                    (MouseButton::X2, false) => (MOUSEEVENTF_XUP, XBUTTON2),
-                };
-                mouse(0, 0, data as i32, flags as u32)
-            }
-            InputEvent::Wheel { delta, horizontal } => {
-                let flags = if horizontal { MOUSEEVENTF_HWHEEL } else { MOUSEEVENTF_WHEEL };
-                mouse(0, 0, delta, flags as u32)
-            }
-            InputEvent::Key { vk, scan, extended, down } => {
-                let mut flags = 0u32;
-                let mut w_vk = 0u16;
-                if scan != 0 {
-                    flags |= KEYEVENTF_SCANCODE as u32;
-                } else {
-                    w_vk = vk;
-                }
-                if extended {
-                    flags |= KEYEVENTF_EXTENDEDKEY as u32;
-                }
-                if !down {
-                    flags |= KEYEVENTF_KEYUP as u32;
-                }
-                INPUT {
-                    r#type: INPUT_KEYBOARD,
-                    Anonymous: INPUT_0 {
-                        ki: KEYBDINPUT {
-                            wVk: w_vk,
-                            wScan: scan,
-                            dwFlags: flags as _,
-                            time: 0,
-                            dwExtraInfo: MKL_EXTRA_INFO,
-                        },
-                    },
-                }
-            }
-        };
-        self.send(input)
+        match send_input(ev) {
+            // Windows refuses input from user processes while its secure desktop (the password
+            // screen of a locked PC) has the input; the lock-screen service can deliver it.
+            Err(InputError::Inject(ERROR_ACCESS_DENIED)) if crate::secure::forward(ev) => Ok(()),
+            result => result,
+        }
+    }
+
+    fn secure_input(&self) -> bool {
+        crate::secure::ready()
     }
 
     fn screens(&self) -> Vec<Rect> {

@@ -91,6 +91,10 @@ pub trait InputInjector: Send + Sync {
     fn is_key_down(&self, _vk: u16) -> bool {
         true
     }
+    /// Input also reaches the password screen of a locked PC (through the lock-screen service).
+    fn secure_input(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -129,11 +133,13 @@ pub mod vk {
 }
 
 #[cfg(windows)]
+pub mod secure;
+#[cfg(windows)]
 mod win;
 #[cfg(windows)]
 mod win_desktop;
 #[cfg(windows)]
-pub use win::{init_process_dpi, start_capture, CaptureHandle, WinInjector as PlatformInjector};
+pub use win::{init_process_dpi, send_input, start_capture, CaptureHandle, WinInjector as PlatformInjector};
 #[cfg(windows)]
 pub use win_desktop::WinDesktop as PlatformDesktop;
 
