@@ -20,7 +20,8 @@ it. Inspired by Mouse Without Borders and Synergy. Built with Rust, Tauri 2 and 
 
 ## Install (each PC)
 
-1. Copy `MouseKey LAN_0.3.1_x64-setup.exe` to the PC and run it.
+1. Download `MouseKey LAN_<version>_x64-setup.exe` from the
+   [latest release](https://github.com/krunal30122001/mousekey-lan/releases/latest) and run it.
    * Windows SmartScreen may say *"Windows protected your PC"* because the build isn't
      code-signed yet. Click **More info → Run anyway**.
    * Approve the administrator prompt. The installer adds a Windows Firewall rule for the app.
@@ -70,3 +71,7 @@ Logs are written to `%APPDATA%\com.mousekeylan.app\logs\mousekey.log` (`MKL_LOG=
 * [docs/SECURITY.md](docs/SECURITY.md): threat model and pairing
 * [docs/PLATFORM.md](docs/PLATFORM.md): Windows permissions, lock screen and pre-login research, macOS/Linux plan
 * [docs/TESTING.md](docs/TESTING.md): automated tests, manual test matrix, performance targets
+
+## License
+
+[MIT](LICENSE). Free to use, change and share. Copyright (c) 2026 Immersive Mobile Designs.
